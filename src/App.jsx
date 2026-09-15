@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 
 // Paste your deployed Google Apps Script Web App URL here:
-const DRIVE_SYNC_API_URL = "https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec";
+const DRIVE_SYNC_API_URL = "https://script.google.com/macros/s/AKfycbz1YxBKGEYFIhBQYDgjnpboLWT83s2Me9xKieExGawzz-MxcKFdhQXzssVEc8kzd0y1xA/exec";
 
 const CAMPAIGN_MILESTONES = [
   'Media Plan Approval',
