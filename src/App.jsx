@@ -49,6 +49,75 @@ export default function App() {
     return timeDiff > 0 && timeDiff <= 86400000;
   }).length;
 
+  // --- REAL-TIME FILE SYNC ENGINE ---
+  const verifyPermission = async (fileHandle, readWrite = true) => {
+    const options = { mode: readWrite ? 'readwrite' : 'read' };
+    if ((await fileHandle.queryPermission(options)) === 'granted') return true;
+    if ((await fileHandle.requestPermission(options)) === 'granted') return true;
+    return false;
+  };
+
+  const connectLiveDrive = async () => {
+    if (!('showOpenFilePicker' in window)) {
+      alert('The File System Access API is not supported in this browser. Please use Google Chrome, Edge, or Brave on desktop.');
+      return;
+    }
+
+    try {
+      const [fileHandle] = await window.showOpenFilePicker({
+        types: [
+          {
+            description: 'JSON Database File',
+            accept: { 'application/json': ['.json'] }
+          }
+        ],
+        multiple: false
+      });
+
+      const hasPerm = await verifyPermission(fileHandle, true);
+      if (!hasPerm) {
+        setSyncStatus('⚠️ Permission Denied');
+        return;
+      }
+
+      setDbFileHandle(fileHandle);
+      const file = await fileHandle.getFile();
+      const contents = await file.text();
+      const parsedData = contents ? JSON.parse(contents) : { tasks: [], learnedTemplates: [] };
+
+      setDb({
+        tasks: parsedData.tasks || [],
+        learnedTemplates: parsedData.learnedTemplates || []
+      });
+      setSyncStatus(`☁️ Synced: ${fileHandle.name}`);
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        console.error('File connect error:', err);
+        setSyncStatus('⚠️ Connection Failed');
+      }
+    }
+  };
+
+  const writeToDrive = async (dataToWrite, handle = dbFileHandle) => {
+    if (!handle) return;
+    try {
+      setSyncStatus('🔄 Syncing...');
+      const hasPerm = await verifyPermission(handle, true);
+      if (!hasPerm) {
+        setSyncStatus('⚠️ Permission Revoked');
+        return;
+      }
+      const writable = await handle.createWritable();
+      await writable.write(JSON.stringify(dataToWrite, null, 2));
+      await writable.close();
+      setSyncStatus(`☁️ Synced: ${handle.name}`);
+    } catch (err) {
+      console.error('Write error:', err);
+      setSyncStatus('⚠️ Write Failed');
+    }
+  };
+
+  // --- REAL-TIME ALARM ENGINE ---
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now();
@@ -68,9 +137,10 @@ export default function App() {
           }
           return task;
         });
+
         if (alarmTriggered) {
           const newDb = { ...prevDb, tasks: updatedTasks };
-          autoSyncToDrive(newDb);
+          if (dbFileHandle) writeToDrive(newDb, dbFileHandle);
           return newDb;
         }
         return prevDb;
@@ -94,30 +164,6 @@ export default function App() {
     } catch (e) {}
   };
 
-  const connectLiveDrive = async () => {
-    try {
-      const [fileHandle] = await window.showOpenFilePicker({
-        types: [{ description: 'JSON Database', accept: { 'application/json': ['.json'] } }]
-      });
-      setDbFileHandle(fileHandle);
-      const file = await fileHandle.getFile();
-      const parsedData = JSON.parse(await file.text());
-      setDb({ tasks: parsedData.tasks || [], learnedTemplates: parsedData.learnedTemplates || [] });
-      setSyncStatus('☁️ Live Sync Active');
-    } catch (error) { console.error(error); }
-  };
-
-  const autoSyncToDrive = async (updatedDb) => {
-    if (!dbFileHandle) return;
-    try {
-      setSyncStatus('🔄 Syncing...');
-      const writable = await dbFileHandle.createWritable();
-      await writable.write(JSON.stringify(updatedDb, null, 2));
-      await writable.close();
-      setSyncStatus('☁️ Live Sync Active');
-    } catch (error) { setSyncStatus('⚠️ Sync Failed'); }
-  };
-
   const handleMilestoneToggle = (milestone) => {
     setForm(prev => ({
       ...prev,
@@ -127,23 +173,29 @@ export default function App() {
     }));
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     let updatedTemplates = [...db.learnedTemplates];
     if (form.customGreetingTonality && !updatedTemplates.includes(form.customGreetingTonality)) {
       updatedTemplates.push(form.customGreetingTonality);
     }
+
     const newTask = {
-      id: `TB-${Math.random().toString(36).substr(2, 4).toUpperCase()}`,
+      id: `TB-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
       ...form,
       assignedMembers: form.assignedMembers.split(',').map(m => m.trim()),
       createdDate: new Date().toISOString(),
       status: 'PENDING', 
       notified: false
     };
+
     const updatedDb = { tasks: [newTask, ...db.tasks], learnedTemplates: updatedTemplates };
     setDb(updatedDb);
-    autoSyncToDrive(updatedDb);
+
+    if (dbFileHandle) {
+      await writeToDrive(updatedDb, dbFileHandle);
+    }
+
     setForm(prev => ({ ...prev, title: '', clientName: '', selectedMilestones: [], clientEmailInput: '' }));
   };
 
@@ -155,8 +207,8 @@ export default function App() {
     const modifiedStr = new Date().toLocaleString([], formatConfig);
     const milestoneText = task.selectedMilestones.map(m => `[✔] ${m}`).join('\n');
 
-    const emailSubject = `[Update] Campaign Onboarding Status: ${task.title} | ${task.clientName}`;
-    const emailBody = `${task.customGreetingTonality || 'Hi Client Team,'}\n\nMilestone Checklist:\n${milestoneText || 'Pending'}\n\n---\n- Deliverable: ${task.title}\n- Assigned Team: ${task.assignedMembers.join(', ')}\n- Target Deadline: ${deadlineStr}\n- Priority: ${analysis}\n\n-- System Logs --\n- Task Created: ${createdStr}\n- Draft Modified: ${modifiedStr}\n\nBest regards,\nAccount Management Team`;
+    const emailSubject = `[Update] Campaign Status: ${task.title} | ${task.clientName}`;
+    const emailBody = `${task.customGreetingTonality || 'Hi Client Team,'}\n\nMilestone Checklist:\n${milestoneText || 'Pending'}\n\n---\n- Deliverable: ${task.title}\n- Assigned Team: ${task.assignedMembers.join(', ')}\n- Target Deadline: ${deadlineStr}\n- Priority: ${analysis}\n\n-- System Logs --\n- Task Created: ${createdStr}\n- Draft Generated: ${modifiedStr}\n\nBest regards,\nAccount Management Team`;
     const whatsapp = `✨ *TaskBrain Status* ✨\n\n📌 *Task:* ${task.title}\n🏢 *Client:* ${task.clientName}\n⏰ *Target:* ${deadlineStr}\n\n📋 *Milestones:*\n${task.selectedMilestones.length > 0 ? task.selectedMilestones.map(m => `• ${m}`).join('\n') : '• Pending'}\n\n_📅 Created: ${createdStr}_\n_🔄 Drafted: ${modifiedStr}_`;
 
     setActiveOutput({ task, emailSubject, emailBody, whatsapp });
@@ -192,11 +244,16 @@ export default function App() {
           </div>
           <div className="flex items-center space-x-4">
             <span className="text-xs font-mono text-slate-400">{syncStatus}</span>
-            {!dbFileHandle && (
-              <button onClick={connectLiveDrive} className="bg-slate-700/50 hover:bg-slate-700 text-teal-300 text-xs px-4 py-2 rounded-lg border border-slate-600 transition-all hover:shadow-md">
-                Connect Drive Database
-              </button>
-            )}
+            <button 
+              onClick={connectLiveDrive} 
+              className={`text-xs px-4 py-2 rounded-lg border transition-all hover:shadow-md font-medium ${
+                dbFileHandle 
+                  ? 'bg-emerald-950/40 text-emerald-300 border-emerald-500/40 hover:bg-emerald-900/40' 
+                  : 'bg-slate-700/50 hover:bg-slate-700 text-teal-300 border-slate-600'
+              }`}
+            >
+              {dbFileHandle ? '🔄 Switch/Reconnect Drive DB' : '📁 Connect Drive Database'}
+            </button>
           </div>
         </div>
         
@@ -215,7 +272,7 @@ export default function App() {
           <div className="lg:col-span-12 space-y-6">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               <div className="bg-slate-800/60 border border-slate-700/50 p-6 rounded-3xl shadow-lg">
-                <h3 className="text-xs text-slate-400 uppercase tracking-wider font-semibold mb-1">Total Network Tasks</h3>
+                <h3 className="text-xs text-slate-400 uppercase tracking-wider font-semibold mb-1">Total Active Tasks</h3>
                 <p className="text-4xl font-bold text-white">{totalActiveTasks}</p>
               </div>
               <div className="bg-rose-900/20 border border-rose-500/30 p-6 rounded-3xl shadow-lg">
@@ -232,7 +289,7 @@ export default function App() {
               <h3 className="text-sm font-medium text-sky-400 uppercase tracking-wider mb-4">Global Task Stream</h3>
               <div className="space-y-3 max-h-[500px] overflow-y-auto custom-scrollbar pr-2">
                 {db.tasks.length === 0 ? (
-                  <div className="text-center py-12 text-slate-500 text-sm">No tasks registered in the cloud network yet.</div>
+                  <div className="text-center py-12 text-slate-500 text-sm">No tasks in current database. Connect your Drive JSON file to load tasks.</div>
                 ) : (
                   db.tasks.map(task => {
                     const isUrgent = (task.clientEmailInput || '').toLowerCase().includes('urgent');
@@ -250,7 +307,7 @@ export default function App() {
                           <p className="text-xs font-mono text-teal-300">{task.deadline ? new Date(task.deadline).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : 'TBD'}</p>
                         </div>
                       </div>
-                    )
+                    );
                   })
                 )}
               </div>
@@ -292,7 +349,7 @@ export default function App() {
                 </div>
                 <div className="space-y-2">
                   <label className="text-[11px] uppercase tracking-wider text-slate-400 font-medium">Client Input (Escalation Analyzer)</label>
-                  <textarea rows="2" value={form.clientEmailInput} onChange={e => setForm({...form, clientEmailInput: e.target.value})} className="w-full bg-slate-900/50 border border-slate-700 rounded-xl p-3 text-sm focus:ring-2 focus:ring-rose-500/50 focus:outline-none placeholder:text-slate-600" placeholder="Paste client notes or emails here..." />
+                  <textarea rows="2" value={form.clientEmailInput} onChange={e => setForm({...form, clientEmailInput: e.target.value})} className="w-full bg-slate-900/50 border border-slate-700 rounded-xl p-3 text-sm focus:ring-2 focus:ring-rose-500/50 focus:outline-none placeholder:text-slate-600" placeholder="Type or paste client emails here..." />
                 </div>
                 <div className="space-y-2">
                   <label className="text-[11px] uppercase tracking-wider text-slate-400 font-medium">Tonality Memory System</label>
@@ -304,8 +361,8 @@ export default function App() {
                   )}
                   <textarea rows="3" value={form.customGreetingTonality} onChange={e => setForm({...form, customGreetingTonality: e.target.value})} className="w-full bg-slate-900/50 border border-slate-700 rounded-xl p-3 text-sm focus:ring-2 focus:ring-teal-500/50 focus:outline-none whitespace-pre-wrap placeholder:text-slate-600" placeholder="Type custom greeting logic here..." />
                 </div>
-                <button type="submit" disabled={!dbFileHandle} className={`w-full font-medium py-3.5 rounded-xl text-sm transition-all shadow-lg ${dbFileHandle ? 'bg-gradient-to-r from-teal-500 to-sky-500 hover:from-teal-400 text-white shadow-teal-500/20' : 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'}`}>
-                  {dbFileHandle ? 'Commit to Cloud Database' : 'Awaiting Secure Drive Link'}
+                <button type="submit" className={`w-full font-medium py-3.5 rounded-xl text-sm transition-all shadow-lg ${dbFileHandle ? 'bg-gradient-to-r from-teal-500 to-sky-500 hover:from-teal-400 text-white shadow-teal-500/20' : 'bg-slate-800 text-slate-400 border border-slate-700 hover:text-white'}`}>
+                  {dbFileHandle ? 'Commit to Cloud Database' : 'Save Locally (Drive Unconnected)'}
                 </button>
               </form>
             </div>
