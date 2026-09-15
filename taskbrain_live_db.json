@@ -1,0 +1,38 @@
+{
+  "tasks": [
+    {
+      "id": "TB-OE0E",
+      "title": "ad set 111",
+      "type": "RETAINER",
+      "clientName": "adani9pbr",
+      "deadline": "2026-09-16T12:23",
+      "assignedMembers": [
+        "A",
+        "X",
+        "B",
+        "K",
+        "Arittra"
+      ],
+      "selectedMilestones": [
+        "Media Plan Approval",
+        "Client Induction Call by AM",
+        "Landing Page Approval",
+        "Creative Approval",
+        "Copy Approval",
+        "Webhook Integration",
+        "Finance Approval",
+        "Credit Allocation",
+        "Project Campaign Approval Ready Mockups",
+        "Campaign Go-Live Notification"
+      ],
+      "customGreetingTonality": "Hi Client Team, \n\nPlease find the needed requisites to be mapped for succsful campaign go-live right after creative approvals. \n\nsharing prerequiites with you.",
+      "clientEmailInput": "Hi Client Team, \n\nPlease find the needed requisites to be mapped for succsful campaign go-live right after creative approvals. \n\nsharing prerequiites with you.",
+      "createdDate": "2026-09-15T18:53:52.821Z",
+      "status": "PENDING",
+      "notified": false
+    }
+  ],
+  "learnedTemplates": [
+    "Hi Client Team, \n\nPlease find the needed requisites to be mapped for succsful campaign go-live right after creative approvals. \n\nsharing prerequiites with you."
+  ]
+}
