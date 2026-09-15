@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 
 // Paste your deployed Google Apps Script Web App URL here:
-const DRIVE_SYNC_API_URL = "https://script.google.com/macros/s/AKfycbz1YxBKGEYFIhBQYDgjnpboLWT83s2Me9xKieExGawzz-MxcKFdhQXzssVEc8kzd0y1xA/exec";
+const DRIVE_SYNC_API_URL = "https://script.google.com/macros/s/YOUR_SCRIPT_ID/exec";
 
 const CAMPAIGN_MILESTONES = [
   'Media Plan Approval',
@@ -34,6 +34,9 @@ export default function App() {
   const [activeOutput, setActiveOutput] = useState(null);
   const [alarmActive, setAlarmActive] = useState(null);
   const [copiedType, setCopiedType] = useState('');
+  
+  // State for Editing Existing Task/Ad Set
+  const [editingTask, setEditingTask] = useState(null);
 
   const smartClientList = Array.from(new Set(db.tasks.map(t => t.clientName).filter(Boolean)));
   const smartDeliverableList = Array.from(new Set(db.tasks.map(t => t.title).filter(Boolean)));
@@ -50,7 +53,7 @@ export default function App() {
     return timeDiff > 0 && timeDiff <= 86400000;
   }).length;
 
-  // --- AUTOMATIC CLOUD FETCH ON APP BOOT ---
+  // --- AUTOMATIC CLOUD FETCH ---
   const fetchCloudDatabase = async () => {
     if (!DRIVE_SYNC_API_URL || DRIVE_SYNC_API_URL.includes("YOUR_SCRIPT_ID")) {
       setSyncStatus('⚠️ Configure Script URL');
@@ -77,14 +80,14 @@ export default function App() {
     fetchCloudDatabase();
   }, []);
 
-  // --- BACKGROUND SYNC BACK TO GOOGLE DRIVE ---
+  // --- BACKGROUND CLOUD SAVE ---
   const syncToCloud = async (updatedDb) => {
     if (!DRIVE_SYNC_API_URL || DRIVE_SYNC_API_URL.includes("YOUR_SCRIPT_ID")) return;
     try {
       setSyncStatus('🔄 Saving to Drive...');
       await fetch(DRIVE_SYNC_API_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'text/plain;charset=utf-8' }, // avoids preflight CORS restrictions
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(updatedDb)
       });
       setSyncStatus('☁️ Drive Auto-Synced');
@@ -173,17 +176,57 @@ export default function App() {
     setForm(prev => ({ ...prev, title: '', clientName: '', selectedMilestones: [], clientEmailInput: '' }));
   };
 
+  // --- DELETE AD SET / TASK ---
+  const deleteTask = (taskId) => {
+    const updatedTasks = db.tasks.filter(t => t.id !== taskId);
+    const updatedDb = { ...db, tasks: updatedTasks };
+    setDb(updatedDb);
+    syncToCloud(updatedDb);
+    if (activeOutput && activeOutput.task.id === taskId) {
+      setActiveOutput(null);
+    }
+  };
+
+  // --- EDIT AD SET / TASK SAVE ---
+  const saveEditedTask = (e) => {
+    e.preventDefault();
+    const updatedTasks = db.tasks.map(t => {
+      if (t.id === editingTask.id) {
+        return {
+          ...t,
+          ...editingTask,
+          assignedMembers: Array.isArray(editingTask.assignedMembers)
+            ? editingTask.assignedMembers
+            : editingTask.assignedMembers.split(',').map(m => m.trim())
+        };
+      }
+      return t;
+    });
+
+    const updatedDb = { ...db, tasks: updatedTasks };
+    setDb(updatedDb);
+    syncToCloud(updatedDb);
+    
+    // Refresh active preview output if currently open
+    if (activeOutput && activeOutput.task.id === editingTask.id) {
+      const refreshedTask = updatedTasks.find(t => t.id === editingTask.id);
+      generateComms(refreshedTask);
+    }
+    
+    setEditingTask(null);
+  };
+
   const generateComms = (task) => {
     const analysis = (task.clientEmailInput || '').toLowerCase().includes('urgent') ? 'ESCALATED' : 'STANDARD';
     const formatConfig = { dateStyle: 'medium', timeStyle: 'short' };
     const deadlineStr = task.deadline ? new Date(task.deadline).toLocaleString([], formatConfig) : 'TBD';
     const createdStr = new Date(task.createdDate).toLocaleString([], formatConfig);
     const modifiedStr = new Date().toLocaleString([], formatConfig);
-    const milestoneText = task.selectedMilestones.map(m => `[✔] ${m}`).join('\n');
+    const milestoneText = task.selectedMilestones ? task.selectedMilestones.map(m => `[✔] ${m}`).join('\n') : '';
 
-    const emailSubject = `[Update] Campaign Status: ${task.title} | ${task.clientName}`;
-    const emailBody = `${task.customGreetingTonality || 'Hi Client Team,'}\n\nMilestone Checklist:\n${milestoneText || 'Pending'}\n\n---\n- Deliverable: ${task.title}\n- Assigned Team: ${task.assignedMembers.join(', ')}\n- Target Deadline: ${deadlineStr}\n- Priority: ${analysis}\n\n-- System Logs --\n- Task Created: ${createdStr}\n- Draft Generated: ${modifiedStr}\n\nBest regards,\nAccount Management Team`;
-    const whatsapp = `✨ *TaskBrain Status* ✨\n\n📌 *Task:* ${task.title}\n🏢 *Client:* ${task.clientName}\n⏰ *Target:* ${deadlineStr}\n\n📋 *Milestones:*\n${task.selectedMilestones.length > 0 ? task.selectedMilestones.map(m => `• ${m}`).join('\n') : '• Pending'}\n\n_📅 Created: ${createdStr}_\n_🔄 Drafted: ${modifiedStr}_`;
+    const emailSubject = `[Update] Campaign Status: ${task.title} (${task.id}) | ${task.clientName}`;
+    const emailBody = `${task.customGreetingTonality || 'Hi Client Team,'}\n\nMilestone Checklist:\n${milestoneText || 'Pending'}\n\n---\n- Task ID: ${task.id}\n- Deliverable: ${task.title}\n- Assigned Team: ${Array.isArray(task.assignedMembers) ? task.assignedMembers.join(', ') : task.assignedMembers}\n- Target Deadline: ${deadlineStr}\n- Priority: ${analysis}\n\n-- System Logs --\n- Task Created: ${createdStr}\n- Draft Generated: ${modifiedStr}\n\nBest regards,\nAccount Management Team`;
+    const whatsapp = `✨ *TaskBrain Status* ✨\n\n🆔 *ID:* ${task.id}\n📌 *Task:* ${task.title}\n🏢 *Client:* ${task.clientName}\n⏰ *Target:* ${deadlineStr}\n\n📋 *Milestones:*\n${task.selectedMilestones && task.selectedMilestones.length > 0 ? task.selectedMilestones.map(m => `• ${m}`).join('\n') : '• Pending'}\n\n_📅 Created: ${createdStr}_\n_🔄 Drafted: ${modifiedStr}_`;
 
     setActiveOutput({ task, emailSubject, emailBody, whatsapp });
   };
@@ -199,6 +242,99 @@ export default function App() {
       <datalist id="client-list">{smartClientList.map((c, i) => <option key={i} value={c} />)}</datalist>
       <datalist id="deliverable-list">{smartDeliverableList.map((d, i) => <option key={i} value={d} />)}</datalist>
 
+      {/* Edit Modal Popup */}
+      {editingTask && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-800 border border-teal-500/40 p-6 rounded-3xl max-w-lg w-full shadow-2xl shadow-teal-950/50">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-base font-semibold text-white">Edit Task / Ad Set Details</h3>
+              <button 
+                onClick={() => setEditingTask(null)}
+                className="text-slate-400 hover:text-white text-sm"
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={saveEditedTask} className="space-y-4">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[11px] uppercase tracking-wider text-slate-400 font-medium">Task / Set ID</label>
+                  <input 
+                    type="text" 
+                    required 
+                    value={editingTask.id} 
+                    onChange={e => setEditingTask({ ...editingTask, id: e.target.value })} 
+                    className="w-full bg-slate-900/60 border border-slate-700 rounded-xl p-2.5 text-xs text-teal-300 font-mono focus:ring-2 focus:ring-teal-500/50 focus:outline-none"
+                    placeholder="e.g. SET-112-A"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] uppercase tracking-wider text-slate-400 font-medium">Target Client</label>
+                  <input 
+                    type="text" 
+                    required 
+                    value={editingTask.clientName} 
+                    onChange={e => setEditingTask({ ...editingTask, clientName: e.target.value })} 
+                    className="w-full bg-slate-900/60 border border-slate-700 rounded-xl p-2.5 text-xs text-white focus:ring-2 focus:ring-teal-500/50 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-[11px] uppercase tracking-wider text-slate-400 font-medium">Deliverable / Set Title</label>
+                <input 
+                  type="text" 
+                  required 
+                  value={editingTask.title} 
+                  onChange={e => setEditingTask({ ...editingTask, title: e.target.value })} 
+                  className="w-full bg-slate-900/60 border border-slate-700 rounded-xl p-2.5 text-xs text-white focus:ring-2 focus:ring-teal-500/50 focus:outline-none"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <label className="text-[11px] uppercase tracking-wider text-slate-400 font-medium">Assigned Team</label>
+                  <input 
+                    type="text" 
+                    required 
+                    value={Array.isArray(editingTask.assignedMembers) ? editingTask.assignedMembers.join(', ') : editingTask.assignedMembers} 
+                    onChange={e => setEditingTask({ ...editingTask, assignedMembers: e.target.value })} 
+                    className="w-full bg-slate-900/60 border border-slate-700 rounded-xl p-2.5 text-xs text-white focus:ring-2 focus:ring-teal-500/50 focus:outline-none"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-[11px] uppercase tracking-wider text-slate-400 font-medium">Deadline</label>
+                  <input 
+                    type="datetime-local" 
+                    required 
+                    value={editingTask.deadline || ''} 
+                    onChange={e => setEditingTask({ ...editingTask, deadline: e.target.value })} 
+                    className="w-full bg-slate-900/60 border border-slate-700 rounded-xl p-2.5 text-xs text-white focus:ring-2 focus:ring-teal-500/50 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="flex space-x-2 pt-2">
+                <button 
+                  type="button" 
+                  onClick={() => setEditingTask(null)} 
+                  className="flex-1 bg-slate-700/50 hover:bg-slate-700 text-slate-300 py-2.5 rounded-xl text-xs transition-all"
+                >
+                  Cancel
+                </button>
+                <button 
+                  type="submit" 
+                  className="flex-1 bg-gradient-to-r from-teal-500 to-sky-500 hover:from-teal-400 text-white font-medium py-2.5 rounded-xl text-xs transition-all shadow-md shadow-teal-500/20"
+                >
+                  Save & Sync Updates
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Alarm Modal */}
       {alarmActive && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
           <div className="bg-slate-800 border border-sky-500/30 p-8 rounded-3xl max-w-sm w-full text-center shadow-2xl shadow-sky-900/50">
@@ -267,10 +403,11 @@ export default function App() {
                       <div key={task.id} className={`p-4 rounded-2xl flex justify-between items-center border ${isUrgent ? 'bg-rose-900/10 border-rose-500/30' : 'bg-slate-900/60 border-slate-700/50'}`}>
                         <div>
                           <div className="flex items-center space-x-3 mb-1">
+                            <span className="font-mono text-[10px] text-teal-400 bg-teal-500/10 px-2 py-0.5 rounded border border-teal-500/20">{task.id}</span>
                             {isUrgent && <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-400 border border-rose-500/30">ESCALATED</span>}
                             <h4 className="font-medium text-sm text-white">{task.title}</h4>
                           </div>
-                          <p className="text-xs text-slate-400">Client: <span className="text-slate-300">{task.clientName}</span> | Team: <span className="text-slate-300">{task.assignedMembers.join(', ')}</span></p>
+                          <p className="text-xs text-slate-400">Client: <span className="text-slate-300">{task.clientName}</span> | Team: <span className="text-slate-300">{Array.isArray(task.assignedMembers) ? task.assignedMembers.join(', ') : task.assignedMembers}</span></p>
                         </div>
                         <div className="text-right">
                           <p className="text-[10px] text-slate-500 uppercase">Deadline</p>
@@ -338,19 +475,48 @@ export default function App() {
             </div>
 
             <div className="lg:col-span-6 space-y-6">
+              {/* Task/Ad Set Queue with Edit & Delete */}
               <div className="bg-slate-800/40 backdrop-blur-sm border border-slate-700/50 p-6 rounded-3xl shadow-xl max-h-[380px] overflow-y-auto custom-scrollbar space-y-3">
+                <div className="flex justify-between items-center mb-1">
+                  <h3 className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Active Ad Sets & Deliverables</h3>
+                  <span className="text-[11px] font-mono text-teal-400">{db.tasks.length} in Queue</span>
+                </div>
                 {db.tasks.length === 0 ? (
-                  <div className="text-center py-12 text-slate-500 text-sm">System idle. Database empty.</div>
+                  <div className="text-center py-12 text-slate-500 text-sm">System idle. Queue empty.</div>
                 ) : (
                   db.tasks.map(task => (
-                    <div key={task.id} className="bg-slate-900/60 border border-slate-700/50 p-4 rounded-2xl flex justify-between items-center hover:border-slate-600 transition-colors">
-                      <div>
-                        <h3 className="font-medium text-sm text-white mb-0.5">{task.title}</h3>
-                        <p className="text-[11px] text-slate-400 tracking-wide uppercase">{task.clientName}</p>
+                    <div key={task.id} className="bg-slate-900/60 border border-slate-700/50 p-4 rounded-2xl flex items-center justify-between hover:border-slate-600 transition-colors">
+                      <div className="space-y-1">
+                        <div className="flex items-center space-x-2">
+                          <span className="font-mono text-[10px] text-teal-400 bg-teal-500/10 px-2 py-0.5 rounded border border-teal-500/20">{task.id}</span>
+                          <h3 className="font-medium text-sm text-white">{task.title}</h3>
+                        </div>
+                        <p className="text-[11px] text-slate-400 uppercase tracking-wider">{task.clientName}</p>
                       </div>
-                      <button onClick={() => generateComms(task)} className="bg-slate-700/50 hover:bg-slate-700 text-teal-300 px-4 py-2 rounded-xl text-xs font-medium transition-colors">
-                        Execute Payload
-                      </button>
+                      
+                      <div className="flex items-center space-x-2">
+                        <button 
+                          onClick={() => generateComms(task)} 
+                          className="bg-slate-800 hover:bg-slate-700 text-teal-300 px-3 py-1.5 rounded-lg text-xs font-medium border border-slate-700 hover:border-teal-500/40 transition-colors"
+                          title="Generate Output Payload"
+                        >
+                          Payload
+                        </button>
+                        <button 
+                          onClick={() => setEditingTask(task)} 
+                          className="bg-sky-950/40 hover:bg-sky-900/50 text-sky-300 border border-sky-500/30 px-2.5 py-1.5 rounded-lg text-xs transition-colors"
+                          title="Edit Task & ID"
+                        >
+                          ✏️
+                        </button>
+                        <button 
+                          onClick={() => deleteTask(task.id)} 
+                          className="bg-rose-950/40 hover:bg-rose-900/50 text-rose-400 border border-rose-500/30 px-2.5 py-1.5 rounded-lg text-xs transition-colors"
+                          title="Delete Ad Set"
+                        >
+                          🗑️
+                        </button>
+                      </div>
                     </div>
                   ))
                 )}
